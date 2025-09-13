@@ -1,0 +1,353 @@
+from aiogram.utils.chat_action import ChatActionSender
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram import Bot, F, Router
+from aiogram.types import Message, CallbackQuery, BotCommandScopeDefault
+from utils.documents import extract_table_from_blank
+from utils.utils import make_reply
+from routers.keyboards import main_keyboard, edit_choose_keyboard
+from routers.commands import user_commands, admin_commands
+from routers.states import UserForm, EditForm
+from typing import Optional
+from config import Settings
+from pathlib import Path
+from db import Db
+import logging
+import asyncio
+
+
+router = Router()
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message, bot: Bot):
+    role = await Db.get_user_role(message.from_user.id)
+    if role in {"user", "admin"}:
+        welcome_message = """👋 Приветствую, я бот для сохранения объектов в базу данных.
+Чтобы добавить новый объект, введите команду /form или отправьте бланк в 'pdf' формате.
+Для помощи введите команду /help"""
+        if role == 'admin':
+            commands = admin_commands
+            welcome_message += """\nТак как вы являетесь админов, вам доступен ряд дополнительных 
+команд, подробнее в команде /help"""
+        else:
+            commands = user_commands
+        await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+        await message.answer(welcome_message)
+    else:
+        await bot.delete_my_commands(scope=BotCommandScopeDefault())
+        await message.answer(
+            "👋 Приветствую, к сожалению, у вас нет доступа к данному боту. Обратитесь к администратору"
+        )
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message):
+    role = await Db.get_user_role(message.from_user.id)
+    help_message = (
+        "Доступные команды:\n"
+        "/start - Приветствие\n"
+        "/help - это сообщение\n"
+        "/form - ввести данные объекта вручную. Если данные свопадут с уже существующим "
+        "объектом, то объект не будет добален в базу, вам выведется существующий объект"
+    )
+    if role == 'admin':
+        help_message += (
+            "\n"
+            "/search - поиск объекта в базе. Введите частично или полностью название объекта, "
+            "адрес объекта, ИНН или название обрядчика подрядчика\n"
+            "/delete - удалить объект по id. id можо взять из результата /search\n"
+            "/promote - присвоить пользователю статус админа по id\n"
+            "/grant - предоставить пользователю доступ по его id\n"
+            "/ban - запретить пользователю доступ по его id"
+        )
+    await message.answer(help_message)
+
+
+@router.message(Command("form"))
+async def cmd_form(message: Message, state: FSMContext):
+    await state.set_state(UserForm.object_name)
+    await message.answer("Наименование объекта")
+
+
+@router.message(UserForm.object_name)
+async def form_object_name(message: Message, state: FSMContext):
+    flag, obj = await Db.check_exists(message.text, fields=['name'])
+    if flag:
+        reply_text = make_reply(dict(obj))
+        await state.clear()
+        await message.answer("Данный объект уже добавлен в базу\n\n")
+        await asyncio.sleep(3)
+        await message.answer(reply_text)
+        return
+    await state.update_data(name=message.text)
+    await state.set_state(UserForm.inn_name_customer)
+    await message.answer("Наименование, ИНН конечного заказчика")
+
+
+@router.message(UserForm.inn_name_customer)
+async def form_inn_name_customer(message: Message, state: FSMContext):
+    flag, obj = await Db.check_exists(message.text, fields=['inn_name_customer'])
+    if flag:
+        reply_text = make_reply(dict(obj))
+        await state.clear()
+        await message.answer("Данный объект уже добавлен в базу\n\n")
+        await asyncio.sleep(3)
+        await message.answer(reply_text)
+        return
+    await state.update_data(inn_name_customer=message.text)
+    await state.set_state(UserForm.adress)
+    await message.answer("Адрес объекта")
+
+
+@router.message(UserForm.adress)
+async def form_adress(message: Message, state: FSMContext):
+    flag, obj = await Db.check_exists(message.text, fields=['adress'])
+    if flag:
+        reply_text = make_reply(dict(obj))
+        await state.clear()
+        await message.answer("Данный объект уже добавлен в базу\n\n")
+        await asyncio.sleep(3)
+        await message.answer(reply_text)
+        return
+    await state.update_data(adress=message.text)
+    await state.set_state(UserForm.type)
+    await message.answer("Тип")
+
+
+@router.message(UserForm.type)
+async def form_type(message: Message, state: FSMContext):
+    await state.update_data(type=message.text)
+    await state.set_state(UserForm.inn_name_gen_contr)
+    await message.answer("Ген. Подрядчик. Наименование, ИНН")
+
+
+@router.message(UserForm.inn_name_gen_contr)
+async def form_inn_name_gen_contr(message: Message, state: FSMContext):
+    await state.update_data(inn_name_gen_contr=message.text)
+    await state.set_state(UserForm.inn_name_subcontr)
+    await message.answer("Субподрядчик. Наименование, ИНН")
+
+
+@router.message(UserForm.inn_name_subcontr)
+async def form_inn_name_subcontr(message: Message, state: FSMContext):
+    await state.update_data(inn_name_subcontr=message.text)
+    await state.set_state(UserForm.inn_name_buyer)
+    await message.answer("Монтажник/закупщик. Наименование, ИНН")
+
+
+@router.message(UserForm.inn_name_buyer)
+async def form_inn_name_buyer(message: Message, state: FSMContext):
+    await state.update_data(inn_name_buyer=message.text)
+    await state.set_state(UserForm.inn_name_designer)
+    await message.answer("Проектировщик. Наименование, ИНН")
+
+
+@router.message(UserForm.inn_name_designer)
+async def form_inn_name_designer(message: Message, state: FSMContext):
+    await state.update_data(inn_name_designer=message.text)
+    await state.set_state(UserForm.purchase_type)
+    await message.answer("Тип закупки (прямая/тендер)")
+
+
+@router.message(UserForm.purchase_type)
+async def form_purchase_type(message: Message, state: FSMContext):
+    await state.update_data(purchase_type=message.text)
+    await state.set_state(UserForm.blank_num)
+    await message.answer("Номер бланка регистрации объекта (по номеру КП)")
+
+
+@router.message(UserForm.blank_num)
+async def form_blank_num(message: Message, state: FSMContext):
+    await state.update_data(blank_num=message.text)
+    await state.set_state(UserForm.reg_date)
+    await message.answer("Дата регистрации объекта")
+
+
+@router.message(UserForm.reg_date)
+async def form_reg_date(message: Message, state: FSMContext):
+    await state.update_data(reg_date=message.text)
+    await state.set_state(UserForm.manager)
+    await message.answer("Персональный менеджер")
+
+
+@router.message(UserForm.manager)
+async def form_manager(message: Message, state: FSMContext):
+    await state.update_data(manager=message.text)
+    await state.set_state(UserForm.phone)
+    await message.answer("Телефон")
+
+
+@router.message(UserForm.phone)
+async def form_phone(message: Message, state: FSMContext):
+    await state.update_data(phone=message.text)
+    await state.set_state(UserForm.email)
+    await message.answer("Почта")
+
+
+@router.message(UserForm.email)
+async def form_email(message: Message, state: FSMContext):
+    await state.update_data(email=message.text)
+    data = await state.get_data()
+    await state.clear()
+    data["document_link"] = ""
+    record_id = await Db.add_object(tg_id=message.from_user.id, **data)
+    reply_text = make_reply(data)
+    keyboard = main_keyboard
+    await state.set_state(EditForm.analyze),
+    await state.update_data(record_id=record_id),
+    await message.answer(reply_text, reply_markup=keyboard)
+
+
+@router.message(F.document)
+async def on_document(message: Message, bot: Bot, settings: Settings, state: FSMContext):
+    doc = message.document
+    assert doc is not None
+    storage_root = Path(settings.storage_dir)
+    user_dir = storage_root / str(message.from_user.id)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    saved_path: Optional[str] = None
+    try:
+        filename = doc.file_name or f"{doc.file_unique_id}.bin"
+        destination = user_dir / f"{doc.file_unique_id}_{filename}"
+        async with ChatActionSender.upload_document(chat_id=message.chat.id, bot=bot):
+            file = await bot.get_file(doc.file_id)
+            await bot.download(file, destination=destination)
+        saved_path = str(destination)
+    except TelegramBadRequest as e:
+        logging.exception("Failed to download document: %s", e)
+
+    fields_dict = extract_table_from_blank(saved_path)
+
+    flag, obj = await Db.check_exists(
+        search_list=[
+            fields_dict.get('name'),
+            fields_dict.get('inn_name_customer'),
+            fields_dict.get('adress'),
+        ]
+    )    
+    if flag:
+        reply_text = make_reply(dict(obj))
+        await message.answer("Данный объект уже добавлен в базу\n\n")
+        await asyncio.sleep(3)
+        await message.answer(reply_text)
+        return
+
+    record_id = await Db.add_object(
+        tg_id=message.from_user.id,
+        name=fields_dict.get('name'),
+        inn_name_customer=fields_dict.get('inn_name_customer'),
+        adress=fields_dict.get('adress'),
+        type=fields_dict.get('type'),
+        inn_name_gen_contr=fields_dict.get('inn_name_gen_contr'),
+        inn_name_subcontr=fields_dict.get('inn_name_subcontr'),
+        inn_name_buyer=fields_dict.get('inn_name_buyer'),
+        inn_name_designer=fields_dict.get('inn_name_designer'),
+        purchase_type=fields_dict.get('purchase_type'),
+        blank_num=fields_dict.get('blank_num'),
+        reg_date=fields_dict.get('reg_date'),
+        manager=fields_dict.get('manager'),
+        phone=fields_dict.get('phone'),
+        email=fields_dict.get('email'),
+        document_link=saved_path
+    )    
+    keyboard = main_keyboard
+    reply_text = make_reply(fields_dict)
+    await state.set_state(EditForm.analyze),
+    await state.update_data(record_id=record_id),
+    await message.answer(reply_text, reply_markup=keyboard)
+
+
+@router.callback_query(StateFilter(EditForm.analyze), F.data.startswith("edit"))
+async def edit(callback: CallbackQuery, state: FSMContext):
+    keyboard = edit_choose_keyboard
+    await state.set_state(EditForm.edit)
+    await state.update_data(main_message_id=int(callback.message.message_id))
+    await callback.message.edit_reply_markup(
+        inline_message_id=callback.inline_message_id,
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(StateFilter(EditForm.analyze), F.data.startswith("confirm"))
+async def edit(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    await bot.delete_message(
+        callback.message.chat.id,
+        callback.message.message_id
+    )
+    await bot.send_message(
+        callback.message.chat.id,
+        "Объект успешно добавлен"
+    )
+    await state.clear()
+    await asyncio.sleep(1)
+    await bot.send_message(
+        callback.message.chat.id,
+        "Чтобы добавить объект загрузите бланк в формате 'pdf' или отправьте команду /form"
+    )
+
+
+@router.callback_query(StateFilter(EditForm.analyze), F.data.startswith("reject"))
+async def edit(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    record_id = await state.get_value('record_id')
+    flag = await Db.delete_object(record_id)
+    if flag:
+        await callback.message.delete()
+        await bot.send_message(
+            callback.message.chat.id,
+            "Добавление объекта отменено успешно"
+        )
+        await state.clear()
+        await bot.send_message(
+            callback.message.chat.id,
+            "Чтобы добавить объект загрузите бланк в формате 'pdf' или отправьте команду /form"
+        )
+    else:
+        await bot.send_message(
+            callback.message.chat.id,
+            "Произшла ошибка при отмене добавления объекта"
+        )
+
+
+@router.callback_query(EditForm.edit)
+async def answer(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(EditForm.edit_field)
+    await state.update_data(field=callback.data)
+    msg = await callback.message.answer(f"Введите новое значение для поля {callback.data}")
+    await state.update_data(service_message_id=msg.message_id)
+
+
+@router.message(EditForm.edit_field)
+async def edit_field(message: Message, bot: Bot, state: FSMContext):
+    data = await state.get_data()
+    res_flag = await Db.edit_object(data['record_id'], data['field'], message.text)
+    if res_flag:
+        res_message = await message.answer("Данные успешно обновлены!")
+    else:
+        res_message = await message.answer("Произошла ошибка при редактировании")
+    await bot.delete_message(
+        chat_id=message.chat.id,
+        message_id=message.message_id
+    )
+    await bot.delete_message(
+        chat_id=message.chat.id,
+        message_id=data['service_message_id']
+    )
+    row = await Db.get_object(data['record_id'])
+    reply_text = make_reply(dict(row))
+    keyboard = main_keyboard
+    await bot.edit_message_text(
+        reply_text,
+        chat_id=message.chat.id,
+        message_id=data['main_message_id'],
+        reply_markup=keyboard
+    )
+    await state.set_state(EditForm.analyze)
+    await asyncio.sleep(3)
+    await res_message.delete()
+
+
+@router.message()
+async def any_message(message: Message):
+    await message.answer("Чтобы добавить объект загрузите бланк в формате 'pdf' или отправьте команду /form")
