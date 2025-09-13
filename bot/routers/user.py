@@ -3,7 +3,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram import Bot, F, Router
-from aiogram.types import Message, CallbackQuery, BotCommandScopeDefault
+from aiogram.types import Message, CallbackQuery, BotCommandScopeChat
 from utils.documents import extract_table_from_blank
 from utils.utils import make_reply
 from routers.keyboards import main_keyboard, edit_choose_keyboard
@@ -20,8 +20,14 @@ import asyncio
 router = Router()
 
 
+@router.message(StateFilter(EditForm.analyze, EditForm.edit))
+async def analyze_message(message: Message):
+    await message.answer("Сначала закончите добавление предыдущего объекта")
+
+
 @router.message(CommandStart())
-async def cmd_start(message: Message, bot: Bot):
+async def cmd_start(message: Message, bot: Bot, state: FSMContext):
+    await state.clear()
     role = await Db.get_user_role(message.from_user.id)
     if role in {"user", "admin"}:
         welcome_message = """👋 Приветствую, я бот для сохранения объектов в базу данных.
@@ -29,14 +35,13 @@ async def cmd_start(message: Message, bot: Bot):
 Для помощи введите команду /help"""
         if role == 'admin':
             commands = admin_commands
-            welcome_message += """\nТак как вы являетесь админов, вам доступен ряд дополнительных 
-команд, подробнее в команде /help"""
+            welcome_message += """\nТак как вы являетесь админов, вам доступен ряд дополнительных команд, подробнее в команде /help"""
         else:
             commands = user_commands
-        await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+        await bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=message.from_user.id))
         await message.answer(welcome_message)
     else:
-        await bot.delete_my_commands(scope=BotCommandScopeDefault())
+        await bot.set_my_commands(commands=[], scope=BotCommandScopeChat(chat_id=message.from_user.id))
         await message.answer(
             "👋 Приветствую, к сожалению, у вас нет доступа к данному боту. Обратитесь к администратору"
         )
@@ -47,7 +52,7 @@ async def cmd_help(message: Message):
     role = await Db.get_user_role(message.from_user.id)
     help_message = (
         "Доступные команды:\n"
-        "/start - Приветствие\n"
+        "/start - приветствие\n"
         "/help - это сообщение\n"
         "/form - ввести данные объекта вручную. Если данные свопадут с уже существующим "
         "объектом, то объект не будет добален в базу, вам выведется существующий объект"
@@ -56,7 +61,7 @@ async def cmd_help(message: Message):
         help_message += (
             "\n"
             "/search - поиск объекта в базе. Введите частично или полностью название объекта, "
-            "адрес объекта, ИНН или название обрядчика подрядчика\n"
+            "адрес объекта, ИНН или название подрядчика\n"
             "/delete - удалить объект по id. id можо взять из результата /search\n"
             "/promote - присвоить пользователю статус админа по id\n"
             "/grant - предоставить пользователю доступ по его id\n"

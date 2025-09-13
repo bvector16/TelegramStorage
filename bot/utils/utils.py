@@ -1,5 +1,4 @@
 from typing import Dict, List
-import html
 
 
 def make_reply(fields_dict: Dict) -> List[str]:

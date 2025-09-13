@@ -1,8 +1,10 @@
 from aiogram.filters import Command
-from aiogram.types import Message, BotCommandScopeDefault
+from aiogram.types import Message, BotCommandScopeChat
+from aiogram.filters import StateFilter
 from aiogram import Router, Bot
 from routers.commands import user_commands, admin_commands
 from utils.utils import make_reply
+from routers.states import EditForm
 from db import Db
 import html
 
@@ -12,6 +14,11 @@ admin_router = Router()
 
 async def _ensure_admin(tg_id: int) -> bool:
     return (await Db.get_user_role(tg_id)) == "admin"
+
+
+@admin_router.message(StateFilter(EditForm.analyze, EditForm.edit))
+async def analyze_message(message: Message):
+    await message.answer("Сначала закончите добавление предыдущего объекта")
 
 
 @admin_router.message(Command("promote"))
@@ -29,7 +36,10 @@ async def cmd_promote(message: Message, bot: Bot):
         await message.answer("Неверный Telegram ID")
         return
     await Db.set_user_role(target, "admin")
-    await bot.set_my_commands(admin_commands, scope=BotCommandScopeDefault())
+    try:
+        await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=target))
+    except:
+        await message.answer("Не удалось установить команды для данного пользоватлея. Для отображения списка команд ему необходимо перезапустить бота командой /start")
     await message.answer(f"✅ Статус админа присвоен пользователю с ID {target}")
 
 
@@ -48,7 +58,10 @@ async def cmd_grant(message: Message, bot: Bot):
         await message.answer("Неверный Telegram ID")
         return
     await Db.set_user_role(target, "user")
-    await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+    try:
+        await bot.set_my_commands(user_commands, scope=BotCommandScopeChat(chat_id=target))
+    except:
+        await message.answer("Не удалось установить команды для данного пользоватлея. Для отображения списка команд ему необходимо перезапустить бота командой /start")
     await message.answer(f"✅ Доступ предоставлен пользователю с ID {target}")
 
 
@@ -67,7 +80,10 @@ async def cmd_ban(message: Message, bot: Bot):
         await message.answer("Неверный Telegram ID")
         return
     await Db.set_user_role(target, "banned")
-    await bot.delete_my_commands(scope=BotCommandScopeDefault())
+    try:
+        await bot.set_my_commands(commands=[], scope=BotCommandScopeChat(chat_id=target))
+    except:
+        pass
     await message.answer(f"🚫 Доступ запрещен пользователю с ID {target}")
 
 
