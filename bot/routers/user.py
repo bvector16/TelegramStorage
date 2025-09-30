@@ -1,12 +1,11 @@
-from aiogram.utils.chat_action import ChatActionSender
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram import Bot, F, Router
 from aiogram.types import Message, CallbackQuery, BotCommandScopeChat
 from utils.documents import extract_table_from_blank
-from utils.utils import make_reply
-from routers.keyboards import main_keyboard, edit_choose_keyboard
+from routers.keyboards import main_keyboard, edit_choose_keyboard, check_continue_keyboard
+from utils.utils import make_reply, check_adress_exist, check_inn_exist, check_name_exist
 from routers.commands import user_commands, admin_commands
 from routers.states import UserForm, EditForm
 from typing import Optional
@@ -78,45 +77,72 @@ async def cmd_form(message: Message, state: FSMContext):
 
 @router.message(UserForm.object_name)
 async def form_object_name(message: Message, state: FSMContext):
-    flag, obj = await Db.check_exists(message.text, fields=['name'])
+    flag, obj, service = await check_name_exist(message.text)
     if flag:
         reply_text = make_reply(dict(obj))
-        await state.clear()
+        await state.set_state(UserForm.check_continue)
+        await state.update_data(
+            name=message.text,
+            name_service=service,
+            continue_state=UserForm.inn_name_customer,
+            continue_text="Наименование, ИНН конечного заказчика"
+        )
         await message.answer("Данный объект уже добавлен в базу\n\n")
-        await asyncio.sleep(3)
-        await message.answer(reply_text)
+        await asyncio.sleep(2)
+        await message.answer(reply_text, reply_markup=check_continue_keyboard)
         return
-    await state.update_data(name=message.text)
+    await state.update_data(
+        name=message.text,
+        name_service=service,
+    )
     await state.set_state(UserForm.inn_name_customer)
     await message.answer("Наименование, ИНН конечного заказчика")
 
 
 @router.message(UserForm.inn_name_customer)
 async def form_inn_name_customer(message: Message, state: FSMContext):
-    flag, obj = await Db.check_exists(message.text, fields=['inn_name_customer'])
+    flag, obj, service = await check_inn_exist(message.text)
     if flag:
         reply_text = make_reply(dict(obj))
-        await state.clear()
+        await state.set_state(UserForm.check_continue)
+        await state.update_data(
+            inn_name_customer=message.text,
+            inn_name_customer_service=service,
+            continue_state=UserForm.adress,
+            continue_text="Адрес объекта"
+        )
         await message.answer("Данный объект уже добавлен в базу\n\n")
-        await asyncio.sleep(3)
-        await message.answer(reply_text)
+        await asyncio.sleep(2)
+        await message.answer(reply_text, reply_markup=check_continue_keyboard)
         return
-    await state.update_data(inn_name_customer=message.text)
+    await state.update_data(
+        inn_name_customer=message.text,
+        inn_name_customer_service=service
+    )
     await state.set_state(UserForm.adress)
     await message.answer("Адрес объекта")
 
 
 @router.message(UserForm.adress)
 async def form_adress(message: Message, state: FSMContext):
-    flag, obj = await Db.check_exists(message.text, fields=['adress'])
+    flag, obj, service = await check_adress_exist(message.text)
     if flag:
         reply_text = make_reply(dict(obj))
-        await state.clear()
+        await state.set_state(UserForm.check_continue)
+        await state.update_data(
+            adress=message.text,
+            adress_service=service,
+            continue_state=UserForm.type,
+            continue_text="Тип"
+        )
         await message.answer("Данный объект уже добавлен в базу\n\n")
-        await asyncio.sleep(3)
-        await message.answer(reply_text)
+        await asyncio.sleep(2)
+        await message.answer(reply_text, reply_markup=check_continue_keyboard)
         return
-    await state.update_data(adress=message.text)
+    await state.update_data(
+        adress=message.text,
+        adress_service=service
+    )
     await state.set_state(UserForm.type)
     await message.answer("Тип")
 
@@ -216,45 +242,34 @@ async def on_document(message: Message, bot: Bot, settings: Settings, state: FSM
     try:
         filename = doc.file_name or f"{doc.file_unique_id}.bin"
         destination = user_dir / f"{doc.file_unique_id}_{filename}"
-        async with ChatActionSender.upload_document(chat_id=message.chat.id, bot=bot):
-            file = await bot.get_file(doc.file_id)
-            await bot.download(file, destination=destination)
+        file = await bot.get_file(doc.file_id)
+        await bot.download(file, destination=destination)
         saved_path = str(destination)
     except TelegramBadRequest as e:
         logging.exception("Failed to download document: %s", e)
 
     fields_dict = extract_table_from_blank(saved_path)
-
-    flag, obj = await Db.check_exists(
-        search_list=[
-            fields_dict.get('name'),
-            fields_dict.get('inn_name_customer'),
-            fields_dict.get('adress'),
-        ]
-    )    
-    if flag:
+    name_flag, obj, service = await check_name_exist(fields_dict.get("name", ""))
+    fields_dict["name_service"] = service
+    inn_flag, obj, service = await check_inn_exist(fields_dict.get('inn_name_customer', ""))
+    fields_dict["inn_name_customer_service"] = service
+    adress_flag, obj, service = await check_adress_exist(fields_dict.get('adress', ""))
+    fields_dict["adress_service"] = service
+    if (name_flag or inn_flag or adress_flag):
         reply_text = make_reply(dict(obj))
+        await state.set_state(UserForm.check_continue)
+        await state.update_data(
+            fields_dict=fields_dict,
+            saved_path=saved_path
+        )
         await message.answer("Данный объект уже добавлен в базу\n\n")
-        await asyncio.sleep(3)
-        await message.answer(reply_text)
+        await asyncio.sleep(2)
+        await message.answer(reply_text, reply_markup=check_continue_keyboard)
         return
 
     record_id = await Db.add_object(
         tg_id=message.from_user.id,
-        name=fields_dict.get('name'),
-        inn_name_customer=fields_dict.get('inn_name_customer'),
-        adress=fields_dict.get('adress'),
-        type=fields_dict.get('type'),
-        inn_name_gen_contr=fields_dict.get('inn_name_gen_contr'),
-        inn_name_subcontr=fields_dict.get('inn_name_subcontr'),
-        inn_name_buyer=fields_dict.get('inn_name_buyer'),
-        inn_name_designer=fields_dict.get('inn_name_designer'),
-        purchase_type=fields_dict.get('purchase_type'),
-        blank_num=fields_dict.get('blank_num'),
-        reg_date=fields_dict.get('reg_date'),
-        manager=fields_dict.get('manager'),
-        phone=fields_dict.get('phone'),
-        email=fields_dict.get('email'),
+        **fields_dict,
         document_link=saved_path
     )    
     keyboard = main_keyboard
@@ -327,6 +342,16 @@ async def answer(callback: CallbackQuery, state: FSMContext):
 async def edit_field(message: Message, bot: Bot, state: FSMContext):
     data = await state.get_data()
     res_flag = await Db.edit_object(data['record_id'], data['field'], message.text)
+    if data['field'] in ["name", "inn_name_customer", "adress"]:
+        if data['field'] == "name":
+            _, _, service = await check_name_exist(message.text)
+        if data['field'] == "inn_name_customer":
+            _, _, service = await check_inn_exist(message.text)
+        if data['field'] == "adress":
+            _, _, service = await check_adress_exist(message.text)
+        res_flag_service = await Db.edit_object(data['record_id'], data['field'] + '_service', service)
+        if not res_flag_service:
+            logging.warning(f"Adding service info for field {data['field']} has failed.")
     if res_flag:
         res_message = await message.answer("Данные успешно обновлены!")
     else:
@@ -339,7 +364,7 @@ async def edit_field(message: Message, bot: Bot, state: FSMContext):
         chat_id=message.chat.id,
         message_id=data['service_message_id']
     )
-    row = await Db.get_object(data['record_id'])
+    row = await Db.get_object("id", data['record_id'])
     reply_text = make_reply(dict(row))
     keyboard = main_keyboard
     await bot.edit_message_text(
@@ -351,6 +376,57 @@ async def edit_field(message: Message, bot: Bot, state: FSMContext):
     await state.set_state(EditForm.analyze)
     await asyncio.sleep(3)
     await res_message.delete()
+
+
+@router.callback_query(UserForm.check_continue)
+async def check_continue(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if callback.data == "continue":
+        fields_dict = await state.get_value("fields_dict", None)
+        if fields_dict:
+            saved_path = await state.get_value("saved_path")
+            record_id = await Db.add_object(
+                tg_id=callback.message.from_user.id,
+                **fields_dict,
+                document_link=saved_path
+            )    
+            keyboard = main_keyboard
+            reply_text = make_reply(fields_dict)
+            await callback.message.delete()
+            await state.clear()
+            await state.set_state(EditForm.analyze),
+            await state.update_data(record_id=record_id),
+            await callback.message.answer(reply_text, reply_markup=keyboard)
+        else:
+            data = await state.get_data()
+            next_state = data.pop("continue_state")
+            next_text = data.pop("continue_text")
+            await state.set_data(data)
+            await state.set_state(next_state)
+            await callback.message.delete()
+            await asyncio.sleep(1)
+            await bot.send_message(
+                chat_id=callback.message.chat.id,
+                text=next_text
+            )
+    elif callback.data == "reject":
+        await callback.message.delete()
+        await state.clear()
+        await bot.send_message(
+            chat_id=callback.message.chat.id,
+            text="Заполнение заявки отменено успешно"
+        )
+        await asyncio.sleep(1)
+        await bot.send_message(
+            chat_id=callback.message.chat.id,
+            text="Чтобы добавить объект загрузите бланк в формате 'pdf' или отправьте команду /form"
+        )
+    else:
+        await callback.message.delete()
+        await state.clear()
+        await bot.send_message(
+            chat_id=callback.message.chat.id,
+            text="Чтобы добавить объект загрузите бланк в формате 'pdf' или отправьте команду /form"
+        )
 
 
 @router.message()

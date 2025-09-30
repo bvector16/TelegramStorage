@@ -1,4 +1,14 @@
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
+from dotenv import load_dotenv
+from asyncpg import Record
+from db import Db
+import logging
+import aiohttp
+import re
+import os
+
+
+load_dotenv()
 
 
 def make_reply(fields_dict: Dict) -> List[str]:
@@ -30,3 +40,70 @@ def make_reply(fields_dict: Dict) -> List[str]:
         reply.append(f"<b>Ссылка на бланк:</b>\n{fields_dict.get('document_link')}")
     reply = f"\n\n".join(ids + reply)
     return reply
+
+
+async def dadataru_request(query: str) -> Optional[str]:
+    url = "https://cleaner.dadata.ru/api/v1/clean/address"
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Token {os.getenv("DADATARU_TOKEN")}",
+        "X-Secret": os.getenv("DADATARU_SECRET")
+    }
+    json = [query]
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=json) as response:
+            response_json = await response.json() if response.status == 200 else None
+    if not response_json:
+        logging.warning(f"Dadata.ru request returned with error: {response.status}")
+        return None
+    city_street = (response_json[0]["city"] if response_json[0]["city"] else response_json[0]["region"]) + ', ' + response_json[0]["street"]
+    return city_street
+
+
+async def check_adress_exist(query: str) -> Tuple[bool, Optional[Record]]:
+    if query in ["-", "—"]:
+        return False, None, query
+    try:
+        query = await dadataru_request(query)
+    except Exception as e:
+        logging.warning(f"Dadata.ru request returned with error: {e}")
+        query = None
+    if not query:
+        return False, None, ""
+    exist_obj = await Db.get_object("adress_service", query)
+    if exist_obj:
+        return True, exist_obj, query
+    return False, None, query
+
+
+def extract_inn(text):
+    pattern = r'(?:ИНН\s*)?(\d{10,12})'
+    match = re.search(pattern, text, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+async def check_inn_exist(query: str) -> Tuple[bool, Optional[Record]]:
+    if query in ["-", "—"]:
+        return False, None, query
+    input_inn = extract_inn(query)
+    if not input_inn:
+        return False, None, ""
+    exist_obj = await Db.get_object("inn_name_customer_service", input_inn)
+    if exist_obj:
+        return True, exist_obj, input_inn
+    return False, None, input_inn
+
+
+async def check_name_exist(query: str) -> Tuple[bool, Optional[Record]]:
+    if query in ["-", "—"]:
+        return False, None, query
+    translate_table = str.maketrans('', '', ' ,.:"«»/()[]{}<>?!№;-–\'')
+    query = query.translate(translate_table)
+    if not query:
+        return False, None, ""
+    exist_obj = await Db.get_object("name_service", query)
+    if exist_obj:
+        return True, exist_obj, query
+    return False, None, query

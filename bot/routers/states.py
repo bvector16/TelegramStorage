@@ -17,6 +17,9 @@ class UserForm(StatesGroup):
     phone = State()
     email = State()
     edit = State()
+    check_continue = State()
+    check_doc_continue = State()
+
 
 class EditForm(StatesGroup):
     analyze = State()

@@ -3,7 +3,7 @@ from aiogram.types import Message, BotCommandScopeChat
 from aiogram.filters import StateFilter
 from aiogram import Router, Bot
 from routers.commands import user_commands, admin_commands
-from utils.utils import make_reply
+from utils.utils import make_reply, check_adress_exist, check_inn_exist, check_name_exist
 from routers.states import EditForm
 from db import Db
 import html
@@ -114,7 +114,15 @@ async def cmd_ban(message: Message):
         await message.answer(f"Применение: /search {html.escape("<search text>")}")
         return
     target = parts[1]
-    flag, obj = await Db.check_exists(target, role='admin')
+    for field in ["name", "inn_name_customer", "adress"]:
+        if field == "name":
+            flag, obj, _ = await check_name_exist(target)
+        if field == "inn_name_customer":
+            flag, obj, _ = await check_inn_exist(target)
+        if field == "adress":
+            flag, obj, _ = await check_adress_exist(target)
+        if flag:
+            break
     if flag:
         reply_text = make_reply(dict(obj))
         await message.answer(reply_text)

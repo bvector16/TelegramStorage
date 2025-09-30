@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Literal, Iterable, Optional, overload
+from typing import List, Iterable, Optional
 import asyncpg
 
 
@@ -16,9 +16,12 @@ CREATE TABLE IF NOT EXISTS objects (
     id bigserial PRIMARY KEY,
     tg_id bigint NOT NULL,
     name TEXT,
+    name_service TEXT,
     inn_name_customer TEXT,
+    inn_name_customer_service TEXT,
     inn_name_buyer TEXT,
     adress TEXT,
+    adress_service TEXT,
     type TEXT,
     inn_name_gen_contr TEXT,
     inn_name_subcontr TEXT,
@@ -32,9 +35,15 @@ CREATE TABLE IF NOT EXISTS objects (
     document_link TEXT,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_inn_name_customer_service
+ON objects(inn_name_customer_service);
+CREATE INDEX IF NOT EXISTS idx_adress_service
+ON objects(adress_service);
+CREATE INDEX IF NOT EXISTS idx_name_service
+ON objects(name_service);
 """
 
-# @dataclass(slots=True)
+
 class Db:
     __pool: asyncpg.Pool
 
@@ -49,7 +58,6 @@ class Db:
     async def close(cls) -> None:
         await cls.__pool.close()
 
-    # --- users ---
     @classmethod
     async def upsert_allowed_users(cls, tg_ids: Iterable[int], role: str = "user") -> None:
         if not tg_ids:
@@ -83,14 +91,16 @@ class Db:
                 role,
             )
 
-    # --- objects ---
     @classmethod
     async def add_object(
         cls,
         tg_id: Optional[int],
         name: Optional[str],
+        name_service: Optional[str],
         inn_name_customer: Optional[str],
+        inn_name_customer_service: Optional[str],
         adress: Optional[str],
+        adress_service: Optional[str],
         type: Optional[str],
         inn_name_gen_contr: Optional[str],
         inn_name_subcontr: Optional[str],
@@ -107,14 +117,17 @@ class Db:
         async with cls.__pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO objects (tg_id, name, inn_name_customer, adress, type, inn_name_gen_contr, inn_name_subcontr, inn_name_buyer, inn_name_designer, purchase_type, blank_num, reg_date, manager, phone, email, document_link)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                INSERT INTO objects (tg_id, name, name_service, inn_name_customer, inn_name_customer_service, adress, adress_service, type, inn_name_gen_contr, inn_name_subcontr, inn_name_buyer, inn_name_designer, purchase_type, blank_num, reg_date, manager, phone, email, document_link)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
                 RETURNING id
                 """,
                 tg_id,
                 name,
+                name_service,
                 inn_name_customer,
+                inn_name_customer_service,
                 adress,
+                adress_service,
                 type,
                 inn_name_gen_contr,
                 inn_name_subcontr,
@@ -128,7 +141,7 @@ class Db:
                 email,
                 document_link
             )
-            return int(row["id"])  # pyright: ignore[reportOptionalSubscript]
+            return int(row["id"])
         
     @classmethod
     async def edit_object(cls, id: int, field: str, value: str) -> bool:
@@ -143,33 +156,17 @@ class Db:
         return result.split()[-1] == '1'
 
     @classmethod
-    async def recent_objects(cls, tg_id: int, limit: int = 10) -> list[asyncpg.Record]:
-        async with cls.__pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT *
-                FROM objects
-                WHERE tg_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-                """,
-                tg_id,
-                limit,
-            )
-            return list(rows)
-
-    @classmethod
-    async def get_object(cls, object_id: int) -> asyncpg.Record:
+    async def get_object(cls, field_to_compare: str, value) -> asyncpg.Record:
         async with cls.__pool.acquire() as conn:
             row = await conn.fetch(
-                """
+                f"""
                 SELECT *
                 FROM objects                
-                WHERE id = $1
+                WHERE {field_to_compare} = $1
                 """,
-                object_id
+                value
             )
-            return row[0]
+            return row[0] if row else None
     
     @classmethod
     async def delete_object(cls, object_id: int) -> bool:
@@ -181,62 +178,10 @@ class Db:
                 object_id
             )
             return result.split()[-1] == '1'
-
-    @overload
+        
     @classmethod
-    async def check_exists(cls, search_string: str, fields: List[str],
-                           role: Literal['user', 'role']) -> tuple[bool, asyncpg.Record]: ...
-
-    @overload
-    @classmethod
-    async def check_exists(cls, search_list: List[str], fields: List[str],
-                           role: Literal['user', 'role']) -> tuple[bool, asyncpg.Record]: ...
-
-    @classmethod
-    async def check_exists(cls, search_string = None, search_list = None,
-                           fields = ['name', 'inn_name_customer', 'adress'], role = 'user') -> tuple[bool, asyncpg.Record]:
-        if not (search_string or search_list):
-            raise ValueError("One of arguments must be set")
-        conditions = []
-        params = []
-
-        if search_string:
-            for i, field in enumerate(fields, 1):
-                conditions.append(f"{field} ILIKE ${i}")
-                params.append(f"%{search_string}%")
-        else:
-            for n, s in enumerate(search_list):
-                for i, field in enumerate(fields, 1):
-                    conditions.append(f"{field} ILIKE ${i + n * len(fields)}")
-                    params.append(f"%{s}%")
-
-        where_clause = " OR ".join(conditions)
-        ids = ["id", "tg_id"] if role == 'admin' else []
-        select_fields = [
-            "name",
-            "inn_name_customer",
-            "adress",
-            "type",
-            "inn_name_gen_contr",
-            "inn_name_subcontr",
-            "inn_name_buyer",
-            "inn_name_designer",
-            "purchase_type",
-            "blank_num",
-            "reg_date",
-            "manager",
-            "phone",
-            "email",
-            "document_link"
-        ]
-        query = f"""
-            SELECT {",".join(ids + select_fields)} FROM objects 
-            WHERE {where_clause}
-        """
-
+    async def get_all(cls, field: str, role: str = 'user') -> List[str]:
+        query = f"""SELECT {field} from objects"""
         async with cls.__pool.acquire() as conn:
-            objects = await conn.fetch(query, *params)
-        if objects:
-            return True, objects[0]
-        else:
-            return False, None
+            objects = await conn.fetch(query)
+        return [obj[field] for obj in objects]

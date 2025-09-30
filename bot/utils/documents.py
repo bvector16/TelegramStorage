@@ -31,5 +31,4 @@ def extract_table_from_blank(pdf_path):
                      iter(el for i, el in enumerate(row) if i != 0 and el)
                 )
                 counter += 1
-        print(fields_dict)
         return fields_dict

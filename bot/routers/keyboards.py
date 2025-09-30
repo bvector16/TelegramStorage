@@ -112,3 +112,20 @@ edit_choose_keyboard = InlineKeyboardMarkup(
         ]
     ]
 )
+
+check_continue_keyboard = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="Продолжить заполнение",
+                callback_data="continue"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="Отменить",
+                callback_data="reject"
+            )
+        ]
+    ]
+)
