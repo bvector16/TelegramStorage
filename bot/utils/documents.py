@@ -27,8 +27,11 @@ def extract_table_from_blank(pdf_path):
         counter = 0
         for table in tables:
             for row in table:
-                fields_dict[fields[counter]] = next(
-                     iter(el for i, el in enumerate(row) if i != 0 and el)
-                )
+                try:
+                    fields_dict[fields[counter]] = next(
+                        iter(el for i, el in enumerate(row) if i != 0 and el)
+                    )
+                except:
+                    fields_dict[fields[counter]] = "-"
                 counter += 1
         return fields_dict
