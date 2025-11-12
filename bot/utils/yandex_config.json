@@ -1,0 +1,6 @@
+{
+    "yandex_oauth": "y0__xDNm-eLARjB3RMgl-DJ_BOWTEX3bEFGUZyBQmmjFombRNY84A",
+    "yandex_folder_id": "b1gh9r2p3rcja16chbte",
+    "yandex_iam_token_url": "https://iam.api.cloud.yandex.net/iam/v1/tokens",
+    "yandex_completion_url": "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+}

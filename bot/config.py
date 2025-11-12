@@ -14,6 +14,8 @@ class Settings(BaseModel):
     database_url: str = Field(alias="DATABASE_URL")
     allowed_user_ids: list[int] = Field(default_factory=list, alias="ALLOWED_USER_IDS")
     storage_dir: str = Field(default="storage", alias="STORAGE_DIR")
+    dadataru_token: str = Field(alias="DADATARU_TOKEN")
+    dadataru_secret: str = Field(alias="DADATARU_SECRET")
 
     @classmethod
     def load(cls) -> "Settings":
@@ -37,5 +39,7 @@ class Settings(BaseModel):
             "DATABASE_URL": os.getenv("DATABASE_URL", ""),
             "ALLOWED_USER_IDS": parse_allowed(os.getenv("ALLOWED_USER_IDS")),
             "STORAGE_DIR": os.getenv("STORAGE_DIR", "storage"),
+            "DADATARU_TOKEN": os.getenv("DADATARU_TOKEN", ""),
+            "DADATARU_SECRET": os.getenv("DADATARU_SECRET", "")
         }
         return cls.model_validate(env)
